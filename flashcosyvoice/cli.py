@@ -37,6 +37,36 @@ from flashcosyvoice.config import Config, CosyVoice2LLMConfig, SamplingParams
 from flashcosyvoice.cosyvoice2 import CosyVoice2
 from flashcosyvoice.utils.audio import mel_spectrogram
 
+def normalize_loudness(waveform: torch.Tensor, target_dbfs: float = -20.0):
+    """
+    Normalize the loudness of the audio.
+
+    Parameters
+    ----------
+    waveform : torch.Tensor
+        Input audio waveform.
+    target_dbfs : float
+        Target loudness in dBFS (default: -20.0).
+
+    Returns
+    -------
+    torch.Tensor
+        Loudness-normalized audio waveform.
+    """
+    # Calculate current loudness
+    current_dBFS = 20 * torch.log10(torch.max(torch.abs(waveform)) + 1e-9)
+    gain = target_dbfs - current_dBFS
+    gain = torch.clamp(gain, -3, 3)  # Limit gain range
+    waveform = waveform * (10 ** (gain / 20.0))
+
+    # Normalize to [-1, 1]
+    max_amplitude = torch.max(torch.abs(waveform)) if waveform.numel() > 0 else 1.0
+    if max_amplitude != 0:
+        waveform = waveform / max_amplitude
+
+    return waveform
+
+
 
 def set_all_random_seed(seed):
     random.seed(seed)
@@ -118,7 +148,10 @@ class AudioDataset(Dataset):
                 if not os.path.exists(data['prompt_wav']):
                     valid = False
                 if valid:
-                    self.datas.append(data)
+                    if 'wav' in data and data['wav'] and os.path.exists(data['wav']):
+                        pass
+                    else:
+                        self.datas.append(data)
                 else:
                     missing += 1
         if torch.distributed.get_node_local_rank() == 0:
@@ -142,6 +175,7 @@ class AudioDataset(Dataset):
         try:
             # 1. feature for s3tokenizer
             audio = s3tokenizer.load_audio(data['prompt_wav'], sr=16000)  # [T]
+            audio = normalize_loudness(audio)
             log_mel = s3tokenizer.log_mel_spectrogram(audio)  # [num_mels, T]
 
             # 2. feature for speaker embedding
